@@ -1,0 +1,173 @@
+# CI + release for the cajeta-cloud-local library (.cja), in cajeta-cloud's shape:
+#
+#   - push to main         → build + test (no publish)
+#   - push a `v*` tag      → build + test + publish (GitHub Release + Olla)
+#   - workflow_dispatch    → dry-run (build+test) or production (also publishes)
+#
+# Releases ship from the `release` branch only; the guard job refuses a tag
+# that is not on it. To release:
+#   git checkout release && git merge --ff-only main && git push origin release
+#   git tag v<version> && git push origin v<version>
+#
+# No test reaches the network; the tests write under a temp root.
+# The Windows and macOS legs (plan 5.3.1) are not here yet.
+#
+# The Olla publish uses the job's GitHub identity (trusted publishing). This
+# repository must be bound to dev.cajeta on Olla before the first release.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Release mode'
+        required: true
+        type: choice
+        default: 'dry-run'
+        options: [dry-run, production]
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  # Must match a release tag of jklappenbach/cajeta; the fleet's current pin.
+  CAJETA_VERSION: v0.46.3
+
+jobs:
+  # Releases are cut from `release` only. A dry-run dispatch publishes nothing,
+  # so it may run from anywhere; a tag or a production dispatch must be on
+  # `release`. Same check as the cajeta compiler's release workflow.
+  guard:
+    name: release branch guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: The tag must be on the release branch
+        env:
+          EVENT: ${{ github.event_name }}
+          MODE: ${{ github.event.inputs.mode }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          BRANCH=release
+          if [ "$EVENT" = "push" ] && [ "${REF#refs/tags/}" = "$REF" ]; then
+            echo "::notice::branch push '$REF_NAME' — build and test only, guard not applied"
+            exit 0
+          fi
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "$MODE" != "production" ]; then
+            echo "::notice::dry-run dispatch from '$REF_NAME' — publishes nothing, guard not applied"
+            exit 0
+          fi
+          if ! git fetch --no-tags origin \
+                 "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" 2>/dev/null; then
+            echo "::error::there is no '$BRANCH' branch on origin. Releases are cut" \
+                 "from it and only from it."
+            exit 1
+          fi
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$REF_NAME" != "$BRANCH" ]; then
+              echo "::error::a production release must be launched from '$BRANCH', not '$REF_NAME'."
+              exit 1
+            fi
+            echo "::notice::production dispatch from '$BRANCH' — guard satisfied"
+            exit 0
+          fi
+          if ! git merge-base --is-ancestor "$SHA" "origin/$BRANCH"; then
+            echo "::error::tag '$REF_NAME' points at $SHA, which is NOT on '$BRANCH'." \
+                 "Nothing ships from a tag that is only on main. Fast-forward" \
+                 "'$BRANCH' to the commit you mean to release, push it, then move the tag."
+            exit 1
+          fi
+          echo "::notice::tag '$REF_NAME' is on '$BRANCH' — guard satisfied"
+
+  build-test:
+    name: build + test (x86_64-linux)
+    needs: [guard]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout cajeta-cloud-local
+        uses: actions/checkout@v4
+
+      - name: Install cajeta toolchain (${{ env.CAJETA_VERSION }})
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$CAJETA_VERSION" --repo jklappenbach/cajeta \
+            --pattern 'cajeta_*_amd64.deb' --dir /tmp
+          sudo apt-get update
+          sudo apt-get install -y /tmp/cajeta_*_amd64.deb
+          cajeta --version || true
+
+      - name: Run the test suite
+        timeout-minutes: 30
+        run: ./run-tests.sh
+
+
+      - name: Build the release .cja
+        id: build
+        run: |
+          set -euo pipefail
+          # cajeta.json is the single source of truth for the version; it is
+          # JSONC, so read it through the toolchain, not jq.
+          VERSION="$(cajeta info | awk '/^[[:space:]]*version:/{print $2; exit}')"
+          if [ -z "$VERSION" ]; then
+            echo "::error::could not read version from cajeta.json via 'cajeta info'" >&2
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [ "$tag_version" != "$VERSION" ]; then
+              echo "::error::tag v${tag_version} disagrees with cajeta.json version ${VERSION} — bump the manifest or retag" >&2
+              exit 1
+            fi
+          fi
+          cajeta build
+          art="build/archive/dev.cajeta.cloud.local-${VERSION}.cja"
+          [ -f "$art" ] || { echo "::error::expected $art after cajeta build" >&2; exit 1; }
+          echo "artifact=$art" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the skills are packed
+        run: |
+          set -euo pipefail
+          cja="${{ steps.build.outputs.artifact }}"
+          if ls skills/*.md >/dev/null 2>&1; then
+            if cajeta archive list "$cja" | grep -q "skills/index.json"; then
+              echo "skills packed: $(ls skills/*.md | wc -l) source(s)"
+            else
+              echo "::error::skills/ has skills but the .cja carries no skills/index.json"; exit 1
+            fi
+          fi
+
+      - name: Upload .cja as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cajeta-cloud-local-${{ steps.build.outputs.version }}
+          path: ${{ steps.build.outputs.artifact }}
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'production')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}', steps.build.outputs.version) }}
+          name: cajeta-cloud-local ${{ steps.build.outputs.version }}
+          generate_release_notes: true
+          files: ${{ steps.build.outputs.artifact }}
+
+      - name: Publish to Olla
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.mode == 'production')
+        uses: jklappenbach/cajeta/.github/actions/olla-publish@main
+        with:
+          cja-path: ${{ steps.build.outputs.artifact }}
+          version: ${{ steps.build.outputs.version }}

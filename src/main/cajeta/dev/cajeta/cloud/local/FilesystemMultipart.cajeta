@@ -1,0 +1,94 @@
+package dev.cajeta.cloud.local;
+
+import cajeta.collection.ArrayList;
+import cajeta.io.file.File;
+import cajeta.io.file.Path;
+import cajeta.lang.String;
+import dev.cajeta.cloud.CloudException;
+import dev.cajeta.cloud.object.MultipartUpload;
+
+/**
+ * A multipart upload staged as one file a part under `<root>/uploads/<id>`;
+ * `complete` assembles them in part order and installs by one rename.
+ */
+final class FilesystemMultipart implements MultipartUpload {
+    FilesystemObjectStore store;
+    String file;
+    String contentType;
+    String dir;
+    ArrayList<int32> numbers;
+    boolean closed;
+
+    FilesystemMultipart(FilesystemObjectStore store, String file, String contentType, String dir) {
+        this.store #= store;
+        this.file = "" + file;
+        this.contentType = "" + contentType;
+        this.dir = "" + dir;
+        this.numbers = heap ArrayList<int32>();
+        this.closed = false;
+        return;
+    }
+
+    public void addPart(int32 partNumber, int8[] bytes) {
+        if (this.closed) {
+            throw heap CloudException(CloudException.PROVIDER_ERROR(), "filesystem", "addPart", this.file,
+                "upload already closed");
+        }
+        if (partNumber < 1 || partNumber > 10000) {
+            throw heap CloudException(CloudException.PROVIDER_ERROR(), "filesystem", "addPart", this.file,
+                "part number " + (int64) partNumber + " out of [1, 10000]");
+        }
+        String part #= this.dir + "/" + partNumber;
+        File.writeAllBytes(part, bytes, bytes.count());
+        int32 at = 0;
+        while (at < this.numbers.count() && this.numbers.get(at) < partNumber) at = at + 1;
+        if (at >= this.numbers.count() || this.numbers.get(at) != partNumber) {
+            this.numbers.insert(at, partNumber);
+        }
+    }
+
+    public #String complete() {
+        if (this.closed) {
+            throw heap CloudException(CloudException.PROVIDER_ERROR(), "filesystem", "complete", this.file,
+                "upload already closed");
+        }
+        if (this.numbers.count() == 0) {
+            throw heap CloudException(CloudException.PROVIDER_ERROR(), "filesystem", "complete", this.file,
+                "no parts uploaded");
+        }
+        this.closed = true;
+        int64 total = 0L;
+        for (int32 i = 0; i < this.numbers.count(); i++) {
+            String part #= this.dir + "/" + this.numbers.get(i);
+            int8[] b #= File.readAllBytes(part);
+            total = total + b.count();
+        }
+        int8[] all = heap int8[total];
+        int64 o = 0L;
+        for (int32 i = 0; i < this.numbers.count(); i++) {
+            String part #= this.dir + "/" + this.numbers.get(i);
+            int8[] b #= File.readAllBytes(part);
+            for (int64 j = 0L; j < b.count(); j++) all[o + j] = b[j];
+            o = o + b.count();
+        }
+        String etag #= this.store.installLocked(this.file, all, total, this.contentType);
+        this.discard();
+        return #etag;
+    }
+
+    public void abort() {
+        if (this.closed) return;
+        this.closed = true;
+        this.discard();
+    }
+
+    private void discard() {
+        for (int32 i = 0; i < this.numbers.count(); i++) {
+            String part #= this.dir + "/" + this.numbers.get(i);
+            Path p #= Path.of(part);
+            if (p.isFile()) p.delete();
+        }
+        Path d #= Path.of(this.dir);
+        if (d.isDir()) d.delete();
+    }
+}

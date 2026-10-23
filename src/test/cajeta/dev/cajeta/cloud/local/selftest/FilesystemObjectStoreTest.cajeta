@@ -1,0 +1,196 @@
+package dev.cajeta.cloud.local.selftest;
+
+import cajeta.io.file.File;
+import cajeta.lang.String;
+import dev.cajeta.unit.Assert;
+import dev.cajeta.cloud.Capabilities;
+import dev.cajeta.cloud.CloudException;
+import dev.cajeta.cloud.object.CondResult;
+import dev.cajeta.cloud.object.ListPage;
+import dev.cajeta.cloud.object.MemoryObjectStore;
+import dev.cajeta.cloud.object.ObjectStore;
+import dev.cajeta.cloud.object.StatResult;
+import dev.cajeta.cloud.testkit.ObjectStoreContract;
+import dev.cajeta.cloud.local.FilesystemObjectStore;
+import dev.cajeta.cloud.local.Local;
+
+/**
+ * The filesystem object store (plan Unit 5, adapters spec §4). Each test
+ * works in its own root under CAJETA_LOCAL_TEST_TMP, which run-tests.sh makes
+ * and removes.
+ */
+public class FilesystemObjectStoreTest {
+
+    public FilesystemObjectStoreTest() {
+        return;
+    }
+
+    @Test
+    public void versionIsTheManifestVersion() {
+        Assert.that(Local.version()).isEqualTo("0.1.0");
+        return;
+    }
+
+    @Test
+    public void theObjectStoreContractHolds() {
+        String root #= FilesystemObjectStoreTest.root("contract");
+        FilesystemObjectStore s = heap FilesystemObjectStore(root);
+        ObjectStoreContract.verify(s, "conformance/");
+        return;
+    }
+
+    @Test
+    public void metadataSurvivesAReopen() {
+        String root #= FilesystemObjectStoreTest.root("reopen");
+        FilesystemObjectStore first = heap FilesystemObjectStore(root);
+        int8[] v #= FilesystemObjectStoreTest.bytes("persisted");
+        String etag #= first.put("docs/a.txt", v, "text/plain");
+        FilesystemObjectStore again = heap FilesystemObjectStore(root);
+        StatResult st #= again.stat("docs/a.txt");
+        Assert.isTrue(st.exists);
+        Assert.equals(etag, st.etag);
+        Assert.equals("text/plain", st.contentType);
+        Assert.isTrue(st.size == 9L);
+        Assert.isTrue(st.lastModified > 1700000000000L);
+        int8[] back #= again.get("docs/a.txt");
+        Assert.equals("persisted", FilesystemObjectStoreTest.text(back));
+        return;
+    }
+
+    @Test
+    public void anInterruptedPutLeavesThePreviousObject() {
+        String root #= FilesystemObjectStoreTest.root("interrupted");
+        FilesystemObjectStore s = heap FilesystemObjectStore(root);
+        int8[] v1 #= FilesystemObjectStoreTest.bytes("version one");
+        String etag #= s.put("k", v1, "text/plain");
+        // A put that died before its rename leaves only its temp file beside the object.
+        String file #= FilesystemObjectStore.fileFor(root, "k");
+        int8[] junk #= FilesystemObjectStoreTest.bytes("half-written");
+        File.writeAllBytes(file + ".tmp.99999", junk, 12L);
+        int8[] back #= s.get("k");
+        Assert.equals("version one", FilesystemObjectStoreTest.text(back));
+        StatResult st #= s.stat("k");
+        Assert.equals(etag, st.etag);
+        ListPage all #= s.list("", "", "", 100L);
+        Assert.isTrue(all.count() == 1L);
+        return;
+    }
+
+    @Test
+    public void listingMatchesTheMemoryDriver() {
+        String root #= FilesystemObjectStoreTest.root("listing");
+        FilesystemObjectStore fs = heap FilesystemObjectStore(root);
+        MemoryObjectStore mem = heap MemoryObjectStore();
+        String[] keys = ["a/1", "a/2", "a/b/3", "a/b/4", "a/c", "b", "b/x", "c/d/e", "Readme", "readme", "z"];
+        int8[] x #= FilesystemObjectStoreTest.bytes("x");
+        for (int64 i = 0L; i < keys.count(); i++) {
+            String e1 #= fs.put(keys[i], x, "text/plain");
+            String e2 #= mem.put(keys[i], x, "text/plain");
+        }
+        FilesystemObjectStoreTest.sameListing(fs, mem, "", "", 100L);
+        FilesystemObjectStoreTest.sameListing(fs, mem, "", "/", 100L);
+        FilesystemObjectStoreTest.sameListing(fs, mem, "a/", "/", 100L);
+        FilesystemObjectStoreTest.sameListing(fs, mem, "a/", "", 2L);
+        FilesystemObjectStoreTest.sameListing(fs, mem, "", "/", 2L);
+        FilesystemObjectStoreTest.sameListing(fs, mem, "a/b", "/", 1L);
+        return;
+    }
+
+    @Test
+    public void aKeyThatWouldEscapeTheRootIsRefused() {
+        String root #= FilesystemObjectStoreTest.root("escape");
+        FilesystemObjectStore s = heap FilesystemObjectStore(root);
+        int8[] x #= FilesystemObjectStoreTest.bytes("x");
+        Assert.isTrue(FilesystemObjectStoreTest.refused(s, "../outside", x));
+        Assert.isTrue(FilesystemObjectStoreTest.refused(s, "a/../../outside", x));
+        Assert.isTrue(FilesystemObjectStoreTest.refused(s, "a/./b", x));
+        Assert.isTrue(FilesystemObjectStoreTest.refused(s, "", x));
+        // Names the filesystem would treat specially are just characters in a key.
+        String e #= s.put("con:aux?*<>|\\\"name", x, "text/plain");
+        int8[] back #= s.get("con:aux?*<>|\\\"name");
+        Assert.equals("x", FilesystemObjectStoreTest.text(back));
+        return;
+    }
+
+    @Test
+    public void theCapabilityDocumentNamesTheGrade() {
+        String root #= FilesystemObjectStoreTest.root("grade");
+        FilesystemObjectStore s = heap FilesystemObjectStore(root);
+        Capabilities c = s.capabilities();
+        Assert.isTrue(c.supports(FilesystemObjectStore.DEV_GRADE()));
+        String why #= c.caveatFor(FilesystemObjectStore.DEV_GRADE());
+        Assert.isTrue(why.indexOf("one process") >= 0L);
+        String name #= c.adapterName();
+        Assert.equals("filesystem", name);
+        String[] needed = ["object.deployable-grade"];
+        String message = "";
+        try {
+            c.assertAll(needed);
+        } catch (CloudException ex) {
+            message = "" + ex.message;
+        }
+        Assert.isTrue(message.indexOf("object.deployable-grade") >= 0L);
+        return;
+    }
+
+    // Every page of fs and mem for one query, keys and prefixes alike.
+    private static void sameListing(ObjectStore fs, ObjectStore mem, String prefix, String delim, int64 max) {
+        String a #= FilesystemObjectStoreTest.allPages(fs, prefix, delim, max);
+        String b #= FilesystemObjectStoreTest.allPages(mem, prefix, delim, max);
+        if (!a.equals(b)) {
+            Assert.fail("list('" + prefix + "', '" + delim + "', " + max + "): filesystem " + a + " memory " + b);
+        }
+        return;
+    }
+
+    private static #String allPages(ObjectStore s, String prefix, String delim, int64 max) {
+        String out #= "" + "";
+        String token #= "" + "";
+        int32 pages = 0;
+        boolean more = true;
+        while (more && pages < 50) {
+            ListPage p #= s.list(prefix, delim, token, max);
+            for (int64 i = 0L; i < p.count(); i++) {
+                String k #= p.keyAt(i);
+                out #= out + "k:" + k + " ";
+            }
+            for (int64 i = 0L; i < p.prefixCount(); i++) {
+                String q #= p.prefixAt(i);
+                out #= out + "p:" + q + " ";
+            }
+            token #= p.nextToken();
+            more = token.byteLength() > 0;
+            out #= out + "| ";
+            pages = pages + 1;
+        }
+        return #out;
+    }
+
+    private static boolean refused(FilesystemObjectStore s, String key, int8[] v) {
+        try {
+            String e #= s.put(key, v, "text/plain");
+        } catch (CloudException ex) {
+            return ex.kind() == CloudException.PROVIDER_ERROR() && ex.message.indexOf("key") >= 0L;
+        }
+        return false;
+    }
+
+    private static #String root(String name) {
+        String base = System.env.get("CAJETA_LOCAL_TEST_TMP");
+        if (base == null) {
+            Assert.fail("CAJETA_LOCAL_TEST_TMP is not set; run through run-tests.sh");
+        }
+        return base + "/" + name;
+    }
+
+    private static #int8[] bytes(String s) {
+        return s.toBytes();
+    }
+
+    private static #String text(int8[] b) {
+        int32 n = (int32) b.count();
+        int8[] c = heap int8[n < 1 ? 1 : n];
+        for (int32 i = 0; i < n; i++) c[i] = b[i];
+        return heap String(#c, n);
+    }
+}

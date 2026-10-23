@@ -1,0 +1,55 @@
+package dev.cajeta.cloud.local;
+
+import cajeta.lang.String;
+import dev.cajeta.cloud.CloudException;
+import dev.cajeta.cloud.object.ObjectWriter;
+
+/** An incremental write staged in memory and installed by one rename at `complete`. */
+final class FilesystemWriter implements ObjectWriter {
+    FilesystemObjectStore store;
+    String file;
+    String contentType;
+    int8[] buf;
+    int64 fill;
+    boolean done;
+
+    FilesystemWriter(FilesystemObjectStore store, String file, String contentType) {
+        this.store #= store;
+        this.file = "" + file;
+        this.contentType = "" + contentType;
+        this.buf = heap int8[4096];
+        this.fill = 0L;
+        this.done = false;
+        return;
+    }
+
+    public void write(int8[] chunk, int64 len) {
+        if (this.done) {
+            throw heap CloudException(CloudException.PROVIDER_ERROR(), "filesystem", "write", this.file,
+                "writer already completed or aborted");
+        }
+        int64 cap = this.buf.count();
+        if (this.fill + len > cap) {
+            int64 grown = cap * 2L;
+            while (grown < this.fill + len) grown = grown * 2L;
+            int8[] bigger = heap int8[grown];
+            for (int64 i = 0L; i < this.fill; i++) bigger[i] = this.buf[i];
+            this.buf #= bigger;
+        }
+        for (int64 i = 0L; i < len; i++) this.buf[this.fill + i] = chunk[i];
+        this.fill = this.fill + len;
+    }
+
+    public #String complete() {
+        if (this.done) {
+            throw heap CloudException(CloudException.PROVIDER_ERROR(), "filesystem", "complete", this.file,
+                "writer already completed or aborted");
+        }
+        this.done = true;
+        return this.store.installLocked(this.file, this.buf, this.fill, this.contentType);
+    }
+
+    public void abort() {
+        this.done = true;
+    }
+}

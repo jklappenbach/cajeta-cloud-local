@@ -1,0 +1,14 @@
+package dev.cajeta.cloud.local.selftest;
+
+import dev.cajeta.unit.Runner;
+
+/** Test entry: reflective discovery runs every `@Test`; 0 when all green. */
+public final class TestMain {
+    public static int32 run() {
+        return Runner.runAll();
+    }
+
+    public static int32 main() {
+        return Runner.runAll();
+    }
+}

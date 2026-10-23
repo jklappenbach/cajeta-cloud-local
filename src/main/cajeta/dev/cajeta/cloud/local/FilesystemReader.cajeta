@@ -1,0 +1,31 @@
+package dev.cajeta.cloud.local;
+
+import dev.cajeta.cloud.object.ObjectReader;
+
+/** An incremental read over an object read whole (dev-grade). */
+final class FilesystemReader implements ObjectReader {
+    int8[] data;
+    int64 pos;
+
+    FilesystemReader(#int8[] data) {
+        this.data #= data;
+        this.pos = 0L;
+        return;
+    }
+
+    public int64 read(int8[] buf, int64 max) {
+        int64 total = this.data.count();
+        if (this.pos >= total) return -1L;
+        int64 n = total - this.pos;
+        if (n > max) n = max;
+        for (int64 i = 0L; i < n; i++) buf[i] = this.data[this.pos + i];
+        this.pos = this.pos + n;
+        return n;
+    }
+
+    public int64 size() { return this.data.count(); }
+
+    public void close() {
+        this.pos = this.data.count();
+    }
+}
