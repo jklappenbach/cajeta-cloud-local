@@ -91,8 +91,8 @@ deps="$(winpath "$cloud_cja"),$(winpath "$crypto_cja")"
 
 # details.version is the source of truth and Local.version() hands consumers a
 # literal copy; the library cannot read its own manifest, so the check is here.
-manifest_version="$( cd "$here" && "$CAJETA" info 2>/dev/null \
-    | awk '/^[[:space:]]*version:/{print $2; exit}' )"
+manifest_version="$(python3 -c 'import json,re,sys
+print(json.loads(re.sub(r"(?m)^\s*//.*$","",open(sys.argv[1]).read()))["details"]["version"])' "$here/cajeta.json")"
 source_version="$(sed -n 's/.*version()[^"]*"\([^"]*\)".*/\1/p' \
     "$here/src/main/cajeta/dev/cajeta/cloud/local/Local.cajeta" | head -1)"
 [[ -n "$manifest_version" && "$manifest_version" == "$source_version" ]] \

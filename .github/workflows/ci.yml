@@ -106,11 +106,15 @@ jobs:
           msystem: MINGW64
           update: true
           path-type: inherit
+          # The compiler links -lssl -lcrypto into every executable: MSYS2's
+          # gcc and OpenSSL put them on the MINGW64 link path.
           install: >-
             tar
             unzip
             curl
             python
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-openssl
       - name: Install cajeta toolchain (${{ env.CAJETA_VERSION }})
         env:
           GH_TOKEN: ${{ github.token }}
