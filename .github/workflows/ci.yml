@@ -144,6 +144,8 @@ jobs:
             --pattern '*aarch64-apple-darwin.tar.gz' --dir "$RUNNER_TEMP/cajeta"
           tar xzf "$RUNNER_TEMP"/cajeta/*.tar.gz -C "$RUNNER_TEMP/cajeta"
           bin="$(echo "$RUNNER_TEMP"/cajeta/cajeta-*/bin)"
+          # The release's macOS binary links Homebrew's openssl@4 dynamically.
+          brew install openssl@4
           echo "$bin" >> "$GITHUB_PATH"
           "$bin/cajeta" --version || true
       - name: Run the test suite (macOS)
