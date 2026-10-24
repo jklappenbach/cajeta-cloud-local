@@ -9,8 +9,10 @@
 #   git checkout release && git merge --ff-only main && git push origin release
 #   git tag v<version> && git push origin v<version>
 #
-# No test reaches the network; the tests write under a temp root.
-# The Windows and macOS legs (plan 5.3.1) are not here yet.
+# No test reaches the network; the tests write under a temp root. The suite
+# runs on Linux, Windows (MSYS2 bash, the release's mingw cajeta.exe) and macOS
+# (the release's aarch64-apple-darwin tarball), on GitHub-hosted runners, and
+# nothing publishes unless all three pass (plan 5.3.1).
 #
 # The Olla publish uses the job's GitHub identity (trusted publishing). This
 # repository must be bound to dev.cajeta on Olla before the first release.
@@ -90,9 +92,63 @@ jobs:
           fi
           echo "::notice::tag '$REF_NAME' is on '$BRANCH' — guard satisfied"
 
+  test-windows:
+    name: test (x86_64-windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          path-type: inherit
+          install: >-
+            tar
+            unzip
+            curl
+            python
+      - name: Install cajeta toolchain (${{ env.CAJETA_VERSION }})
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /usr/local/bin
+          gh release download "$CAJETA_VERSION" --repo jklappenbach/cajeta \
+            --pattern '*x86_64-w64-mingw32.exe' --dir /tmp/cajeta-win
+          mv /tmp/cajeta-win/*x86_64-w64-mingw32.exe /usr/local/bin/cajeta.exe
+          chmod +x /usr/local/bin/cajeta.exe
+          cajeta --version || true
+      - name: Run the test suite (Windows)
+        timeout-minutes: 30
+        run: ./run-tests.sh
+
+  test-macos:
+    name: test (aarch64-macos)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cajeta toolchain (${{ env.CAJETA_VERSION }})
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$CAJETA_VERSION" --repo jklappenbach/cajeta \
+            --pattern '*aarch64-apple-darwin.tar.gz' --dir "$RUNNER_TEMP/cajeta"
+          tar xzf "$RUNNER_TEMP"/cajeta/*.tar.gz -C "$RUNNER_TEMP/cajeta"
+          bin="$(echo "$RUNNER_TEMP"/cajeta/cajeta-*/bin)"
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/cajeta" --version || true
+      - name: Run the test suite (macOS)
+        timeout-minutes: 30
+        run: ./run-tests.sh
+
   build-test:
     name: build + test (x86_64-linux)
-    needs: [guard]
+    needs: [guard, test-windows, test-macos]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout cajeta-cloud-local

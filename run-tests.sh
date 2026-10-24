@@ -30,6 +30,12 @@ out="$(mktemp -d)"
 # KEEP_OUT=1 keeps the build directory (the test binary) for a rerun or a debugger.
 if [[ -n "${KEEP_OUT:-}" ]]; then echo ">> keeping $out"; else trap 'rm -rf "$out"' EXIT; fi
 
+# Under MSYS2 or Git Bash on Windows, paths handed to the native cajeta.exe and
+# the test binary are converted to Windows form (C:/...); elsewhere unchanged.
+winpath() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1;
     else shasum -a 256 "$1" | cut -d' ' -f1; fi
@@ -81,7 +87,7 @@ for a in "$unit_cja" "$cloud_cja" "$crypto_cja"; do
     [[ -f "$a" ]] || { echo "missing archive: $a" >&2; exit 1; }
     echo ">> classpath: $a"
 done
-deps="$cloud_cja,$crypto_cja"
+deps="$(winpath "$cloud_cja"),$(winpath "$crypto_cja")"
 
 # details.version is the source of truth and Local.version() hands consumers a
 # literal copy; the library cannot read its own manifest, so the check is here.
@@ -94,14 +100,14 @@ source_version="$(sed -n 's/.*version()[^"]*"\([^"]*\)".*/\1/p' \
 echo ">> manifest: version $manifest_version matches Local.version()"
 
 echo ">> building cloud-local library .cja"
-"$CAJETA" --emit=cja --classpath="$deps" -o "$out/local.cja" \
-    dev.cajeta.cloud.local.Local.run "$here/src/main/cajeta" "$out" >/dev/null
+"$CAJETA" --emit=cja --classpath="$deps" -o "$(winpath "$out/local.cja")" \
+    dev.cajeta.cloud.local.Local.run "$(winpath "$here/src/main/cajeta")" "$(winpath "$out")" >/dev/null
 
 echo ">> building + running the test binary"
 "$CAJETA" --emit=exe --profile=test \
-    --classpath="$out/local.cja,$deps,$unit_cja" \
-    -o "$out/localtests" \
-    dev.cajeta.cloud.local.selftest.TestMain.run "$here/src/test/cajeta" "$out" >/dev/null
+    --classpath="$(winpath "$out/local.cja"),$deps,$(winpath "$unit_cja")" \
+    -o "$(winpath "$out/localtests")" \
+    dev.cajeta.cloud.local.selftest.TestMain.run "$(winpath "$here/src/test/cajeta")" "$(winpath "$out")" >/dev/null
 
 mkdir -p "$out/roots"
-CAJETA_LOCAL_TEST_TMP="$out/roots" "$out/localtests"
+CAJETA_LOCAL_TEST_TMP="$(winpath "$out/roots")" "$out/localtests"
