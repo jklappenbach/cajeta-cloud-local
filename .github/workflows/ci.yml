@@ -145,9 +145,9 @@ jobs:
           tar xzf "$RUNNER_TEMP"/cajeta/*.tar.gz -C "$RUNNER_TEMP/cajeta"
           bin="$(echo "$RUNNER_TEMP"/cajeta/cajeta-*/bin)"
           # The release's macOS binary links Homebrew libraries dynamically
-          # (openssl@4, antlr4-cpp-runtime seen so far): install the set it
+          # (openssl@4, antlr4-cpp-runtime, zeromq seen so far): install the set it
           # was built against.
-          brew install openssl@4 antlr4-cpp-runtime zstd glog xxhash
+          brew install openssl@4 antlr4-cpp-runtime zstd glog xxhash zeromq
           echo "$bin" >> "$GITHUB_PATH"
           "$bin/cajeta" --version || true
       - name: Run the test suite (macOS)
