@@ -152,7 +152,11 @@ jobs:
           "$bin/cajeta" --version || true
       - name: Run the test suite (macOS)
         timeout-minutes: 30
-        run: ./run-tests.sh
+        # The compiler passes a versioned Cellar path for OpenSSL
+        # (.../Cellar/openssl@4/4.0.3/lib); point clang at the installed one.
+        run: |
+          export LIBRARY_PATH="$(brew --prefix openssl@4)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          ./run-tests.sh
 
   build-test:
     name: build + test (x86_64-linux)
