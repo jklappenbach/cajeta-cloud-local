@@ -38,7 +38,7 @@ permissions:
 
 env:
   # Must match a release tag of jklappenbach/cajeta; the fleet's current pin.
-  CAJETA_VERSION: v0.46.3
+  CAJETA_VERSION: v0.50.0
 
 jobs:
   # Releases are cut from `release` only. A dry-run dispatch publishes nothing,

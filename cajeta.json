@@ -18,7 +18,7 @@
 
     "settings": {
         "toolchain": {
-            "version": "0.46.3"
+            "version": "0.50.0"
         },
 
         "capabilities": ["filesystem"],
