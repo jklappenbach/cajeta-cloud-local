@@ -132,7 +132,10 @@ jobs:
 
   test-macos:
     name: test (aarch64-macos)
-    runs-on: macos-14
+    # macos-15, as the release's own darwin legs since cajeta 5363809d: the
+    # dylibs v0.50.0 bundles beside its binary need macOS 15's libc++, and on
+    # macos-14 dyld stops the compiler at launch (exception_ptr symbol).
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install cajeta toolchain (${{ env.CAJETA_VERSION }})
